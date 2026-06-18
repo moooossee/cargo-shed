@@ -3,6 +3,7 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
+use toml_edit::{DocumentMut, Item};
 
 use crate::error::{ShedError, utf8_path};
 use crate::lockfile::Lockfile;
@@ -13,6 +14,7 @@ use crate::scan::SourceIndex;
 pub enum ProjectKind {
     SingleCrate,
     WorkspaceRoot,
+    WorkspaceMember,
 }
 
 #[derive(Debug, Clone)]
@@ -47,11 +49,7 @@ impl Project {
             None
         };
         let source_index = SourceIndex::scan(&root)?;
-        let kind = if manifest.is_workspace_root() {
-            ProjectKind::WorkspaceRoot
-        } else {
-            ProjectKind::SingleCrate
-        };
+        let kind = project_kind(&root, &manifest);
 
         Ok(Self {
             root,
@@ -70,6 +68,40 @@ impl Project {
             Vec::new()
         }
     }
+}
+
+fn project_kind(root: &Utf8Path, manifest: &Manifest) -> ProjectKind {
+    if manifest.is_workspace_root() {
+        return ProjectKind::WorkspaceRoot;
+    }
+
+    if has_parent_workspace(root) {
+        ProjectKind::WorkspaceMember
+    } else {
+        ProjectKind::SingleCrate
+    }
+}
+
+fn has_parent_workspace(root: &Utf8Path) -> bool {
+    let mut current = root.parent();
+
+    while let Some(parent) = current {
+        let manifest_path = parent.join("Cargo.toml");
+
+        if manifest_path.exists()
+            && read_to_string(&manifest_path)
+                .ok()
+                .and_then(|raw| raw.parse::<DocumentMut>().ok())
+                .and_then(|document| document.get("workspace").map(Item::is_table_like))
+                .unwrap_or(false)
+        {
+            return true;
+        }
+
+        current = parent.parent();
+    }
+
+    false
 }
 
 fn resolve_manifest_path(path: Option<&Utf8PathBuf>) -> Result<Utf8PathBuf, ShedError> {

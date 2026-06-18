@@ -1,0 +1,54 @@
+---
+source: tests/report_snapshots.rs
+assertion_line: 64
+expression: report.to_human()
+---
+cargo-shed report
+
+Project: [PROJECT]
+Score: 51/100
+Issues: 2 high, 2 medium, 1 low
+
+Problems found:
+
+[HIGH] duplicate-versions:syn
+Reason: syn appears in multiple versions
+Evidence:
+- Crate: syn
+- Versions: 1.0.109, 2.0.106
+- Impact area: proc-macro stack
+Suggested: Run cargo tree -d to inspect which dependencies keep each version
+Run: cargo tree -d
+
+[HIGH] tokio-full
+Reason: tokio uses the full feature set
+Evidence:
+- Dependency: dependencies.tokio
+- Current features: ["full"]
+- Inferred features: ["macros", "rt-multi-thread", "time"]
+Suggested: Replace "full" with the inferred feature set ["macros", "rt-multi-thread", "time"] after confirming it covers the project
+Run: cargo shed --fix tokio-full
+
+[MEDIUM] reqwest-default-features
+Reason: reqwest keeps default features enabled
+Evidence:
+- Dependency: dependencies.reqwest
+- Current default-features: implicit true
+- Current features: ["json"]
+Suggested: Consider reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] } after choosing the intended TLS backend
+
+[MEDIUM] unused-dependency:chrono
+Reason: chrono appears to be unused in scanned Rust sources
+Evidence:
+- Dependency: dependencies.chrono
+- Crate name checked: chrono
+- Scanned Rust files: 1
+Suggested: Remove chrono if it is not used by features, macros, reexports, or generated code
+Run: cargo shed --fix unused-dependency:chrono
+
+[LOW] heavy-crate:openssl
+Reason: openssl is often expensive to compile
+Evidence:
+- Dependency: dependencies.openssl
+- Reason: native TLS bindings often add platform-specific build cost
+Suggested: Keep it if it is required; consider limiting features or making it optional if compile time matters

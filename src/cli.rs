@@ -102,7 +102,11 @@ fn run_report(cli: Cli) -> Result<u8, ShedError> {
 
     match format {
         OutputFormat::Human => {
-            let human = report.to_human();
+            let human = if check {
+                report.to_check_human()
+            } else {
+                report.to_human()
+            };
             print!("{human}");
         }
         OutputFormat::Json => {

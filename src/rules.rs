@@ -1,5 +1,5 @@
 use crate::Project;
-use crate::fix::Fix;
+use crate::fix::{Edit, Fix, FixSafety};
 use crate::issue::{Evidence, Issue, Severity, Suggestion};
 use crate::manifest::{Dependency, DependencySection};
 
@@ -87,16 +87,39 @@ impl Rule for TokioFullRule {
                     ));
                 }
 
+                let command = tokio_replacement_features(project, dependency)
+                    .map(|_| "cargo shed --fix tokio-full".to_owned());
+
                 issue.with_suggestion(Suggestion::new(
                     tokio_suggestion(&inferred_features),
-                    None::<String>,
+                    command,
                 ))
             })
             .collect()
     }
 
-    fn fix(&self, _project: &Project, _issue: &Issue) -> Option<Fix> {
-        None
+    fn fix(&self, project: &Project, issue: &Issue) -> Option<Fix> {
+        if issue.rule_id != self.id() {
+            return None;
+        }
+
+        let dependency = project.manifest.dependencies.iter().find(|dependency| {
+            dependency_matches_package(dependency, "tokio")
+                && dependency.features.iter().any(|feature| feature == "full")
+                && issue_matches_dependency(issue, dependency)
+        })?;
+        let features = tokio_replacement_features(project, dependency)?;
+
+        Some(Fix {
+            issue_id: issue.id.clone(),
+            edits: vec![Edit::ReplaceDependencyFeatures {
+                section: dependency.section.clone(),
+                name: dependency.name.clone(),
+                features,
+                default_features: None,
+            }],
+            safety: FixSafety::Safe,
+        })
     }
 }
 
@@ -189,23 +212,21 @@ impl Rule for UnusedDependencyRule {
             .map(|dependency| {
                 let crate_name = dependency.crate_name();
                 let allowlisted = is_unused_allowlisted(&crate_name);
+                let issue_id = unused_issue_id(dependency);
                 let message = if allowlisted {
                     format!("{crate_name} may be unused, but it is commonly used indirectly")
                 } else {
                     format!("{crate_name} appears to be unused in scanned Rust sources")
                 };
-                let mut issue = Issue::new(
-                    unused_issue_id(dependency),
-                    self.id(),
-                    self.severity(),
-                    message,
-                )
-                .with_evidence(Evidence::new("Dependency", dependency_path(dependency)))
-                .with_evidence(Evidence::new("Crate name checked", crate_name.clone()))
-                .with_evidence(Evidence::new(
-                    "Scanned Rust files",
-                    project.source_index.files.len().to_string(),
-                ));
+                let command = unused_dependency_is_safe_to_remove(project, dependency)
+                    .then(|| format!("cargo shed --fix {issue_id}"));
+                let mut issue = Issue::new(issue_id, self.id(), self.severity(), message)
+                    .with_evidence(Evidence::new("Dependency", dependency_path(dependency)))
+                    .with_evidence(Evidence::new("Crate name checked", crate_name.clone()))
+                    .with_evidence(Evidence::new(
+                        "Scanned Rust files",
+                        project.source_index.files.len().to_string(),
+                    ));
 
                 if project.source_index.has_ambiguous_generation() {
                     issue = issue.with_evidence(Evidence::new(
@@ -216,14 +237,30 @@ impl Rule for UnusedDependencyRule {
 
                 issue.with_suggestion(Suggestion::new(
                     unused_suggestion(&crate_name, allowlisted),
-                    None::<String>,
+                    command,
                 ))
             })
             .collect()
     }
 
-    fn fix(&self, _project: &Project, _issue: &Issue) -> Option<Fix> {
-        None
+    fn fix(&self, project: &Project, issue: &Issue) -> Option<Fix> {
+        if issue.rule_id != self.id() {
+            return None;
+        }
+
+        let dependency = project.manifest.dependencies.iter().find(|dependency| {
+            unused_dependency_is_safe_to_remove(project, dependency)
+                && issue_matches_dependency(issue, dependency)
+        })?;
+
+        Some(Fix {
+            issue_id: issue.id.clone(),
+            edits: vec![Edit::RemoveDependency {
+                section: dependency.section.clone(),
+                name: dependency.name.clone(),
+            }],
+            safety: FixSafety::Safe,
+        })
     }
 }
 
@@ -355,6 +392,74 @@ fn dependency_label(dependency: &Dependency) -> String {
     }
 }
 
+fn issue_matches_dependency(issue: &Issue, dependency: &Dependency) -> bool {
+    issue.evidence.iter().any(|evidence| {
+        evidence.label == "Dependency" && evidence.value == dependency_path(dependency)
+    })
+}
+
+fn tokio_replacement_features(project: &Project, dependency: &Dependency) -> Option<Vec<String>> {
+    if dependency.section == DependencySection::Workspace
+        || dependency.workspace
+        || dependency.package.is_some()
+        || project.source_index.has_ambiguous_generation()
+        || has_unknown_tokio_usage(project)
+    {
+        return None;
+    }
+
+    project
+        .manifest
+        .dependency_item(&dependency.section, &dependency.name)?
+        .as_table_like()?
+        .get("features")?
+        .as_value()?
+        .as_array()?;
+
+    let inferred_features = infer_tokio_features(project);
+
+    if inferred_features.is_empty() {
+        return None;
+    }
+
+    let mut features = Vec::new();
+
+    for feature in dependency
+        .features
+        .iter()
+        .filter(|feature| feature.as_str() != "full")
+    {
+        push_feature_if(&mut features, feature, true);
+    }
+
+    for feature in inferred_features {
+        push_feature_if(&mut features, &feature, true);
+    }
+
+    (!features.is_empty()).then_some(features)
+}
+
+fn unused_dependency_is_safe_to_remove(project: &Project, dependency: &Dependency) -> bool {
+    let crate_name = dependency.crate_name();
+
+    matches!(
+        dependency.section,
+        DependencySection::Normal | DependencySection::Dev
+    ) && !dependency.optional
+        && !dependency.workspace
+        && dependency.package.is_none()
+        && dependency.path.is_none()
+        && dependency.default_features.is_none()
+        && dependency.features.is_empty()
+        && !is_unused_allowlisted(&crate_name)
+        && !project.source_index.files.is_empty()
+        && !project.source_index.has_ambiguous_generation()
+        && !project.source_index.crate_appears_used(&crate_name)
+        && project
+            .manifest
+            .dependency_is_simple_string(&dependency.section, &dependency.name)
+}
+
 fn format_features(features: &[String]) -> String {
     if features.is_empty() {
         return "[]".to_owned();
@@ -376,12 +481,17 @@ fn infer_tokio_features(project: &Project) -> Vec<String> {
         &mut features,
         "macros",
         project.source_index.contains_token("#[tokio::main")
-            || project.source_index.contains_token("#[tokio::test"),
+            || project.source_index.contains_token("#[tokio::test")
+            || project.source_index.contains_token("tokio::select!")
+            || project.source_index.contains_token("tokio::join!")
+            || project.source_index.contains_token("tokio::try_join!")
+            || project.source_index.contains_token("tokio::pin!"),
     );
     push_feature_if(
         &mut features,
         "rt",
         project.source_index.contains_token("tokio::spawn")
+            || project.source_index.contains_token("tokio::task")
             || project
                 .source_index
                 .contains_token("tokio::runtime::Runtime"),
@@ -412,6 +522,55 @@ fn infer_tokio_features(project: &Project) -> Vec<String> {
     }
 
     features
+}
+
+fn has_unknown_tokio_usage(project: &Project) -> bool {
+    project
+        .source_index
+        .files
+        .iter()
+        .any(|file| text_has_unknown_tokio_usage(&file.text))
+}
+
+fn text_has_unknown_tokio_usage(text: &str) -> bool {
+    let mut offset = 0;
+
+    while let Some(index) = text[offset..].find("tokio::") {
+        let start = offset + index + "tokio::".len();
+        let segment = text[start..]
+            .chars()
+            .take_while(|ch| *ch == '_' || ch.is_ascii_alphanumeric())
+            .collect::<String>();
+
+        if segment.is_empty() || !is_known_tokio_segment(&segment) {
+            return true;
+        }
+
+        offset = start + segment.len();
+    }
+
+    false
+}
+
+fn is_known_tokio_segment(segment: &str) -> bool {
+    matches!(
+        segment,
+        "main"
+            | "test"
+            | "select"
+            | "join"
+            | "try_join"
+            | "pin"
+            | "spawn"
+            | "task"
+            | "runtime"
+            | "fs"
+            | "net"
+            | "process"
+            | "signal"
+            | "sync"
+            | "time"
+    )
 }
 
 fn push_feature_if(features: &mut Vec<String>, feature: &str, condition: bool) {

@@ -1,6 +1,6 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
-use toml_edit::{DocumentMut, Item, Value};
+use toml_edit::{DocumentMut, Item, TableLike, Value};
 
 use crate::error::ShedError;
 use crate::project::read_to_string;
@@ -81,6 +81,31 @@ impl Manifest {
             .and_then(Item::as_table_like)
             .and_then(|table| table.get("name"))
             .and_then(Item::as_str)
+    }
+
+    pub fn dependency_item(&self, section: &DependencySection, name: &str) -> Option<&Item> {
+        dependency_table(&self.document, section)?.get(name)
+    }
+
+    pub fn dependency_is_simple_string(&self, section: &DependencySection, name: &str) -> bool {
+        self.dependency_item(section, name)
+            .is_some_and(|item| item.as_str().is_some())
+    }
+}
+
+fn dependency_table<'a>(
+    document: &'a DocumentMut,
+    section: &DependencySection,
+) -> Option<&'a dyn TableLike> {
+    match section {
+        DependencySection::Normal => document.get("dependencies")?.as_table_like(),
+        DependencySection::Dev => document.get("dev-dependencies")?.as_table_like(),
+        DependencySection::Build => document.get("build-dependencies")?.as_table_like(),
+        DependencySection::Workspace => document
+            .get("workspace")?
+            .as_table_like()?
+            .get("dependencies")?
+            .as_table_like(),
     }
 }
 

@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "A Cargo subcommand that finds dependency bloat, risky features, duplicate crate versions, and safe cleanup opportunities in Rust projects."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/nozurai/cargo-shed"
+repository = "https://github.com/moooossee/cargo-shed"
 readme = "README.md"
 keywords = ["cargo", "dependencies", "cli", "rust", "lint"]
 categories = ["command-line-utilities", "development-tools::cargo-plugins"]
@@ -13,6 +13,7 @@ include = [
   "/src",
   "/tests",
   "/Cargo.toml",
+  "/Cargo.lock",
   "/README.md",
   "/CHANGELOG.md",
   "/LICENSE-APACHE",

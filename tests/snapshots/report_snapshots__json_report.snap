@@ -1,0 +1,135 @@
+---
+source: tests/report_snapshots.rs
+assertion_line: 78
+expression: json
+---
+{
+  "schema_version": 1,
+  "root": "[PROJECT]",
+  "score": 51,
+  "summary": {
+    "total": 5,
+    "high": 2,
+    "medium": 2,
+    "low": 1
+  },
+  "issues": [
+    {
+      "id": "duplicate-versions:syn",
+      "rule_id": "duplicate-versions",
+      "severity": "high",
+      "message": "syn appears in multiple versions",
+      "evidence": [
+        {
+          "label": "Crate",
+          "value": "syn"
+        },
+        {
+          "label": "Versions",
+          "value": "1.0.109, 2.0.106"
+        },
+        {
+          "label": "Impact area",
+          "value": "proc-macro stack"
+        }
+      ],
+      "suggestion": {
+        "summary": "Run cargo tree -d to inspect which dependencies keep each version",
+        "command": "cargo tree -d"
+      }
+    },
+    {
+      "id": "tokio-full",
+      "rule_id": "tokio-full",
+      "severity": "high",
+      "message": "tokio uses the full feature set",
+      "evidence": [
+        {
+          "label": "Dependency",
+          "value": "dependencies.tokio"
+        },
+        {
+          "label": "Current features",
+          "value": "[\"full\"]"
+        },
+        {
+          "label": "Inferred features",
+          "value": "[\"macros\", \"rt-multi-thread\", \"time\"]"
+        }
+      ],
+      "suggestion": {
+        "summary": "Replace \"full\" with the inferred feature set [\"macros\", \"rt-multi-thread\", \"time\"] after confirming it covers the project",
+        "command": "cargo shed --fix tokio-full"
+      }
+    },
+    {
+      "id": "reqwest-default-features",
+      "rule_id": "reqwest-default-features",
+      "severity": "medium",
+      "message": "reqwest keeps default features enabled",
+      "evidence": [
+        {
+          "label": "Dependency",
+          "value": "dependencies.reqwest"
+        },
+        {
+          "label": "Current default-features",
+          "value": "implicit true"
+        },
+        {
+          "label": "Current features",
+          "value": "[\"json\"]"
+        }
+      ],
+      "suggestion": {
+        "summary": "Consider reqwest = { version = \"0.12\", default-features = false, features = [\"json\", \"rustls-tls\"] } after choosing the intended TLS backend",
+        "command": null
+      }
+    },
+    {
+      "id": "unused-dependency:chrono",
+      "rule_id": "unused-dependency",
+      "severity": "medium",
+      "message": "chrono appears to be unused in scanned Rust sources",
+      "evidence": [
+        {
+          "label": "Dependency",
+          "value": "dependencies.chrono"
+        },
+        {
+          "label": "Crate name checked",
+          "value": "chrono"
+        },
+        {
+          "label": "Scanned Rust files",
+          "value": "1"
+        }
+      ],
+      "suggestion": {
+        "summary": "Remove chrono if it is not used by features, macros, reexports, or generated code",
+        "command": "cargo shed --fix unused-dependency:chrono"
+      }
+    },
+    {
+      "id": "heavy-crate:openssl",
+      "rule_id": "heavy-crate",
+      "severity": "low",
+      "message": "openssl is often expensive to compile",
+      "evidence": [
+        {
+          "label": "Dependency",
+          "value": "dependencies.openssl"
+        },
+        {
+          "label": "Reason",
+          "value": "native TLS bindings often add platform-specific build cost"
+        }
+      ],
+      "suggestion": {
+        "summary": "Keep it if it is required; consider limiting features or making it optional if compile time matters",
+        "command": null
+      }
+    }
+  ],
+  "skipped_checks": []
+}
