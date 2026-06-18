@@ -1,0 +1,5 @@
+/target
+Cargo.lock.shed.bak
+Cargo.toml.shed.bak
+.DS_Store
+*.swp
